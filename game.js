@@ -1267,6 +1267,41 @@ function startFromStartPage(){
     console.error('无法设置 sessionStorage:', e);
   }
   
+  // 保存自定义资金到 sessionStorage
+  try {
+    const budgetInput = document.getElementById('start-budget');
+    if (budgetInput) {
+      const value = budgetInput.value.trim();
+      if (value) {
+        const num = parseInt(value, 10);
+        if (!isNaN(num) && num > 0) {
+          sessionStorage.setItem('oi_custom_budget', num.toString());
+        } else {
+          sessionStorage.removeItem('oi_custom_budget');
+        }
+      } else {
+        sessionStorage.removeItem('oi_custom_budget');
+      }
+    }
+  } catch(e) {
+    console.error('保存自定义资金失败:', e);
+  }
+  
+  // 保存自定义名字到 sessionStorage
+  try {
+    let customNames = null;
+    if (typeof window.getCustomStudentNames === 'function') {
+      customNames = window.getCustomStudentNames();
+    }
+    if (customNames && Array.isArray(customNames) && customNames.length > 0) {
+      sessionStorage.setItem('oi_custom_student_names', JSON.stringify(customNames));
+    } else {
+      sessionStorage.removeItem('oi_custom_student_names');
+    }
+  } catch(e) {
+    console.error('保存自定义名字失败:', e);
+  }
+  
   const url = `game.html?new=1&d=${encodeURIComponent(diff)}&p=${encodeURIComponent(prov)}&c=${encodeURIComponent(count)}`;
   window.location.href = url;
 }
@@ -1279,6 +1314,31 @@ function initGame(difficulty, province_choice, student_count){
   game.province_id = province_choice;
   game.province_name = prov.name; game.province_type = prov.type; game.is_north = prov.isNorth; game.budget = prov.baseBudget; game.base_comfort = prov.isNorth?BASE_COMFORT_NORTH:BASE_COMFORT_SOUTH;
   try{ game.province_climate = prov.climate || null; }catch(e){ game.province_climate = null; }
+  
+  // 获取自定义名字列表（如果存在）
+  let customNames = null;
+  if (typeof window.getCustomStudentNames === 'function') {
+    customNames = window.getCustomStudentNames();
+  }
+  // 如果从全局函数未获取到，尝试从 sessionStorage 读取
+  if (!customNames || !Array.isArray(customNames) || customNames.length === 0) {
+    try {
+      const stored = sessionStorage.getItem('oi_custom_student_names');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          customNames = parsed;
+        }
+      }
+    } catch(e) {
+      console.error('读取自定义名字失败:', e);
+    }
+  }
+  // 如果自定义名字存在且是数组，创建一个副本以便按顺序使用
+  let customNamesCopy = null;
+  if (Array.isArray(customNames) && customNames.length > 0) {
+    customNamesCopy = [...customNames];
+  }
   
   // 如果选择香港(14)或澳门(25)，设置使用繁体中文
   if (province_choice === 14 || province_choice === 25) {
@@ -1294,6 +1354,31 @@ function initGame(difficulty, province_choice, student_count){
   if(game.difficulty===1){ game.budget = Math.floor(game.budget * EASY_MODE_BUDGET_MULTIPLIER); }
   else if(game.difficulty===3){ game.budget = Math.floor(game.budget * HARD_MODE_BUDGET_MULTIPLIER); }
   
+  // 自定义初始资金覆盖
+  let customBudgetApplied = false;
+  if (typeof window.getCustomBudget === 'function') {
+    const customBudget = window.getCustomBudget();
+    if (customBudget !== null && customBudget > 0) {
+      game.budget = customBudget;
+      customBudgetApplied = true;
+    }
+  }
+  // 如果全局函数未提供，尝试从 sessionStorage 读取
+  if (!customBudgetApplied) {
+    try {
+      const stored = sessionStorage.getItem('oi_custom_budget');
+      if (stored) {
+        const num = parseInt(stored, 10);
+        if (!isNaN(num) && num > 0) {
+          game.budget = num;
+          customBudgetApplied = true;
+        }
+      }
+    } catch(e) {
+      console.error('读取自定义资金失败:', e);
+    }
+  }
+
   let recruitedStudents = [];
   try {
     const recruitedData = sessionStorage.getItem('oi_recruited_students');
@@ -1338,12 +1423,37 @@ function initGame(difficulty, province_choice, student_count){
     // 获取当前所有学生的名字列表以避免重名
     const existingNames = game.students.map(s => s.name);
     let name;
-    if (typeof generateUniqueName === 'function') {
-      name = generateUniqueName({ region: prov.name, existingNames: existingNames });
-    } else if (typeof generateName === 'function') {
-      name = generateName({ region: prov.name });
+    
+    // 优先使用自定义名字
+    if (customNamesCopy && customNamesCopy.length > 0) {
+      // 从自定义名字列表中取出第一个名字
+      let candidate = customNamesCopy.shift();
+      // 检查是否与现有名字重复
+      while (existingNames.includes(candidate) && customNamesCopy.length > 0) {
+        candidate = customNamesCopy.shift();
+      }
+      // 如果仍然重复，回退到随机生成
+      if (!existingNames.includes(candidate)) {
+        name = candidate;
+      } else {
+        // 所有自定义名字都重复了，回退到随机生成
+        if (typeof generateUniqueName === 'function') {
+          name = generateUniqueName({ region: prov.name, existingNames: existingNames });
+        } else if (typeof generateName === 'function') {
+          name = generateName({ region: prov.name });
+        } else {
+          name = '学生';
+        }
+      }
     } else {
-      name = '学生';
+      // 没有自定义名字，使用随机生成
+      if (typeof generateUniqueName === 'function') {
+        name = generateUniqueName({ region: prov.name, existingNames: existingNames });
+      } else if (typeof generateName === 'function') {
+        name = generateName({ region: prov.name });
+      } else {
+        name = '学生';
+      }
     }
     let mean = (min_val + max_val) / 2;
     let stddev = (max_val - min_val);
@@ -1376,6 +1486,13 @@ function initGame(difficulty, province_choice, student_count){
   }catch(e){ console.error('initGame trigger game_start talents failed', e); }
   
   log("初始化完成，开始游戏！");
+  
+  // 清除 sessionStorage 中的自定义名字，避免重复使用
+  try {
+    sessionStorage.removeItem('oi_custom_student_names');
+  } catch(e) {
+    console.error('清除自定义名字失败:', e);
+  }
 }
 
 window.onload = ()=>{
